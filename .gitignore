@@ -1,0 +1,15 @@
+
+.venv/
+__pycache__/
+*.py[cod]
+.env
+.streamlit/secrets.toml
+
+# Raw cricket datasets
+all_matches.csv
+[0-9]*.csv
+[0-9]*_info.csv
+data/
+
+# Generated Python cache
+.pytest_cache/

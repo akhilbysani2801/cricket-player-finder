@@ -1,4 +1,3 @@
-
 from pathlib import Path
 
 import pandas as pd
@@ -85,7 +84,6 @@ st.markdown(
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
     }
-
     </style>
     """,
     unsafe_allow_html=True,
@@ -98,6 +96,7 @@ st.markdown(
 
 @st.cache_data
 def load_dashboard_data():
+
     if not CAREER_FILE.exists():
         raise FileNotFoundError(
             f"Missing file: {CAREER_FILE}. Run python main.py first."
@@ -194,7 +193,7 @@ def load_dashboard_data():
             + ", ".join(missing_teams)
         )
 
-    # Standardise names and numeric columns.
+    # Standardise player names.
     for frame in [career, season, teams]:
         frame["player"] = (
             frame["player"]
@@ -223,25 +222,41 @@ def load_dashboard_data():
         "bowling_average",
     ]
 
+    # IMPORTANT:
+    # Preserve missing averages as NaN instead of replacing
+    # them with zero. This prevents misleading average graphs.
     for column in numeric_columns:
+
         career[column] = pd.to_numeric(
-            career[column], errors="coerce"
-        ).fillna(0)
+            career[column],
+            errors="coerce",
+        )
 
         season[column] = pd.to_numeric(
-            season[column], errors="coerce"
-        ).fillna(0)
+            season[column],
+            errors="coerce",
+        )
+
+        if column not in [
+            "batting_average",
+            "bowling_average",
+        ]:
+            career[column] = career[column].fillna(0)
+            season[column] = season[column].fillna(0)
 
     season["season"] = pd.to_numeric(
-        season["season"], errors="coerce"
+        season["season"],
+        errors="coerce",
     )
 
     teams["season"] = pd.to_numeric(
-        teams["season"], errors="coerce"
+        teams["season"],
+        errors="coerce",
     )
 
     teams["matches_played"] = pd.to_numeric(
-        teams["matches_played"], errors="coerce"
+        teams["matches_played"],
+        errors="coerce",
     ).fillna(0)
 
     career = career.drop_duplicates(
@@ -265,22 +280,30 @@ def load_dashboard_data():
 
 @st.cache_resource
 def load_recommendation_engine():
+
     players = load_players()
     model = prepare_recommender(players)
+
     return players, model
 
 
 try:
+
     career_data, season_data, team_data = load_dashboard_data()
+
     recommender_players, recommender_model = (
         load_recommendation_engine()
     )
+
 except Exception as error:
+
     st.error(f"Could not load project data: {error}")
+
     st.info(
         "Check your processed_data folder and run "
         "`python main.py` if necessary."
     )
+
     st.stop()
 
 
@@ -290,27 +313,36 @@ except Exception as error:
 
 def number(value):
     """Format a number without unnecessary decimal places."""
+
     try:
         value = float(value)
+
         if pd.isna(value):
             return "0"
+
         return f"{value:,.0f}"
+
     except (TypeError, ValueError):
         return "0"
 
 
 def decimal(value, places=2):
-    """Format a decimal value."""
+    """Format decimal values; show missing values as N/A."""
+
     try:
         value = float(value)
+
         if pd.isna(value):
-            return "0"
+            return "N/A"
+
         return f"{value:,.{places}f}"
+
     except (TypeError, ValueError):
-        return "0"
+        return "N/A"
 
 
 def get_career(player_name):
+
     result = career_data[
         career_data["player"] == player_name
     ]
@@ -322,6 +354,7 @@ def get_career(player_name):
 
 
 def get_seasons(player_name):
+
     result = season_data[
         season_data["player"] == player_name
     ].copy()
@@ -330,6 +363,7 @@ def get_seasons(player_name):
 
 
 def get_teams(player_name):
+
     result = team_data[
         team_data["player"] == player_name
     ].copy()
@@ -340,6 +374,7 @@ def get_teams(player_name):
 
 
 def get_best_batting_season(player_name):
+
     seasons = get_seasons(player_name)
 
     if seasons.empty:
@@ -352,13 +387,15 @@ def get_best_batting_season(player_name):
 
 
 def get_best_bowling_season(player_name):
+
     seasons = get_seasons(player_name)
 
     if seasons.empty:
         return None
 
-    # Only consider seasons in which the player bowled.
-    seasons = seasons[seasons["legal_balls"] > 0]
+    seasons = seasons[
+        seasons["legal_balls"] > 0
+    ]
 
     if seasons.empty:
         return None
@@ -370,6 +407,7 @@ def get_best_bowling_season(player_name):
 
 
 def career_team_summary(player_name):
+
     history = get_teams(player_name)
 
     if history.empty:
@@ -379,7 +417,12 @@ def career_team_summary(player_name):
             "team_count": 0,
         }
 
-    team_names = history["team"].dropna().unique().tolist()
+    team_names = (
+        history["team"]
+        .dropna()
+        .unique()
+        .tolist()
+    )
 
     latest_season = history["season"].max()
 
@@ -398,6 +441,7 @@ def career_team_summary(player_name):
 
 
 def show_player_metrics(player_name):
+
     row = get_career(player_name)
 
     if row is None:
@@ -406,17 +450,36 @@ def show_player_metrics(player_name):
 
     col1, col2, col3, col4 = st.columns(4)
 
-    col1.metric("Career Runs", number(row["total_runs"]))
-    col2.metric("Strike Rate", decimal(row["strike_rate"]))
-    col3.metric("Batting Average", decimal(row["batting_average"]))
-    col4.metric("Wickets", number(row["wickets"]))
+    col1.metric(
+        "Career Runs",
+        number(row["total_runs"]),
+    )
+
+    col2.metric(
+        "Strike Rate",
+        decimal(row["strike_rate"]),
+    )
+
+    col3.metric(
+        "Batting Average",
+        decimal(row["batting_average"]),
+    )
+
+    col4.metric(
+        "Wickets",
+        number(row["wickets"]),
+    )
 
     col5, col6, col7, col8 = st.columns(4)
 
     col5.metric("Fours", number(row["fours"]))
     col6.metric("Sixes", number(row["sixes"]))
     col7.metric("Economy", decimal(row["economy"]))
-    col8.metric("Runs Conceded", number(row["runs_conceded"]))
+
+    col8.metric(
+        "Runs Conceded",
+        number(row["runs_conceded"]),
+    )
 
 
 # =========================================================
@@ -424,7 +487,10 @@ def show_player_metrics(player_name):
 # =========================================================
 
 st.sidebar.markdown("## 🏏 Cricket Player Finder")
-st.sidebar.caption("IPL Performance & Recommendation Analytics")
+
+st.sidebar.caption(
+    "IPL Performance & Recommendation Analytics"
+)
 
 page = st.sidebar.radio(
     "Navigate",
@@ -438,7 +504,10 @@ page = st.sidebar.radio(
 )
 
 all_players = sorted(
-    career_data["player"].dropna().unique().tolist()
+    career_data["player"]
+    .dropna()
+    .unique()
+    .tolist()
 )
 
 if not all_players:
@@ -446,6 +515,7 @@ if not all_players:
     st.stop()
 
 st.sidebar.divider()
+
 st.sidebar.caption(
     f"{len(all_players):,} player records loaded"
 )
@@ -491,10 +561,12 @@ if page == "Overview":
     left, right = st.columns(2)
 
     with left:
+
         st.subheader("🏆 Top Run Scorers")
 
         top_batters = career_data.nlargest(
-            10, "total_runs"
+            10,
+            "total_runs",
         )[
             ["player", "total_runs", "strike_rate"]
         ].rename(
@@ -516,10 +588,12 @@ if page == "Overview":
         )
 
     with right:
+
         st.subheader("🎯 Top Wicket Takers")
 
         top_bowlers = career_data.nlargest(
-            10, "wickets"
+            10,
+            "wickets",
         )[
             ["player", "wickets", "economy"]
         ].rename(
@@ -541,9 +615,11 @@ if page == "Overview":
         )
 
     st.divider()
+
     st.subheader("📅 Season Coverage")
 
     if seasons:
+
         st.write(
             f"Seasons available in the processed dataset: "
             f"{int(min(seasons))}–{int(max(seasons))}"
@@ -570,6 +646,7 @@ if page == "Overview":
 elif page == "Player Explorer":
 
     st.title("🔎 Player Explorer")
+
     st.write(
         "Explore a player's career statistics, best seasons, "
         "and year-by-year progress."
@@ -584,7 +661,9 @@ elif page == "Player Explorer":
     row = get_career(selected_player)
 
     if row is not None:
+
         st.subheader(selected_player)
+
         show_player_metrics(selected_player)
 
         team_summary = career_team_summary(selected_player)
@@ -610,7 +689,10 @@ elif page == "Player Explorer":
         else:
             a_seasons = 0
 
-        c.metric("Seasons with Team Records", a_seasons)
+        c.metric(
+            "Seasons with Team Records",
+            a_seasons,
+        )
 
         st.caption(
             "Team details are inferred from match appearances. "
@@ -619,6 +701,7 @@ elif page == "Player Explorer":
         )
 
         st.divider()
+
         st.subheader("🏆 Best Seasons")
 
         best_batting = get_best_batting_season(
@@ -632,9 +715,11 @@ elif page == "Player Explorer":
         left, right = st.columns(2)
 
         with left:
+
             st.markdown("**Best season by runs**")
 
             if best_batting is not None:
+
                 st.metric(
                     "Season",
                     int(best_batting["season"]),
@@ -646,21 +731,26 @@ elif page == "Player Explorer":
                     "Runs",
                     number(best_batting["total_runs"]),
                 )
+
                 y.metric(
                     "Strike Rate",
                     decimal(best_batting["strike_rate"]),
                 )
+
                 z.metric(
                     "Average",
                     decimal(best_batting["batting_average"]),
                 )
+
             else:
                 st.info("No batting season data found.")
 
         with right:
+
             st.markdown("**Best season by wickets**")
 
             if best_bowling is not None:
+
                 st.metric(
                     "Season",
                     int(best_bowling["season"]),
@@ -672,31 +762,40 @@ elif page == "Player Explorer":
                     "Wickets",
                     number(best_bowling["wickets"]),
                 )
+
                 y.metric(
                     "Economy",
                     decimal(best_bowling["economy"]),
                 )
+
                 z.metric(
                     "Bowling Average",
                     decimal(best_bowling["bowling_average"]),
                 )
+
             else:
                 st.info("No bowling season data found.")
 
         st.divider()
+
         st.subheader("📈 Season-by-Season Performance")
 
         player_seasons = get_seasons(selected_player)
 
         if player_seasons.empty:
+
             st.info("No season records found for this player.")
+
         else:
+
             chart_tab1, chart_tab2, chart_tab3 = st.tabs(
                 ["Batting", "Bowling", "Season Table"]
             )
 
             with chart_tab1:
+
                 st.markdown("**Runs by season**")
+
                 st.line_chart(
                     player_seasons.set_index("season")[
                         ["total_runs"]
@@ -704,28 +803,72 @@ elif page == "Player Explorer":
                 )
 
                 st.markdown("**Strike rate by season**")
+
                 st.line_chart(
                     player_seasons.set_index("season")[
                         ["strike_rate"]
                     ]
                 )
 
+                # FIXED BATTING-AVERAGE GRAPH
                 st.markdown("**Batting average by season**")
-                st.line_chart(
-                    player_seasons.set_index("season")[
-                        ["batting_average"]
-                    ]
-                )
+
+                valid_average_seasons = player_seasons[
+                    player_seasons["batting_average"].notna()
+                    & (player_seasons["dismissals"] > 0)
+                ].sort_values("season")
+
+                if valid_average_seasons.empty:
+
+                    st.info(
+                        "No valid batting-average data is available "
+                        "for this player. A batting average requires "
+                        "at least one dismissal in the recorded data."
+                    )
+
+                else:
+
+                    average_chart = (
+                        valid_average_seasons
+                        .set_index("season")[["batting_average"]]
+                    )
+
+                    st.line_chart(average_chart)
+
+                    st.dataframe(
+                        valid_average_seasons[
+                            [
+                                "season",
+                                "total_runs",
+                                "dismissals",
+                                "batting_average",
+                            ]
+                        ].rename(
+                            columns={
+                                "season": "Season",
+                                "total_runs": "Runs",
+                                "dismissals": "Dismissals",
+                                "batting_average": "Batting Average",
+                            }
+                        ),
+                        hide_index=True,
+                        use_container_width=True,
+                    )
 
             with chart_tab2:
+
                 bowling_seasons = player_seasons[
                     player_seasons["legal_balls"] > 0
                 ]
 
                 if bowling_seasons.empty:
+
                     st.info("No bowling records available.")
+
                 else:
+
                     st.markdown("**Wickets by season**")
+
                     st.line_chart(
                         bowling_seasons.set_index("season")[
                             ["wickets"]
@@ -733,6 +876,7 @@ elif page == "Player Explorer":
                     )
 
                     st.markdown("**Economy by season**")
+
                     st.line_chart(
                         bowling_seasons.set_index("season")[
                             ["economy"]
@@ -740,6 +884,7 @@ elif page == "Player Explorer":
                     )
 
             with chart_tab3:
+
                 display = player_seasons[
                     [
                         "season",
@@ -780,6 +925,7 @@ elif page == "Player Explorer":
 elif page == "Compare Players":
 
     st.title("⚖️ Compare Players")
+
     st.write(
         "Compare the career statistics and season trends "
         "of any two players."
@@ -788,6 +934,7 @@ elif page == "Compare Players":
     col1, col2 = st.columns(2)
 
     with col1:
+
         player_a = st.selectbox(
             "Select Player A",
             all_players,
@@ -798,6 +945,7 @@ elif page == "Compare Players":
     default_b = 1 if len(all_players) > 1 else 0
 
     with col2:
+
         player_b = st.selectbox(
             "Select Player B",
             all_players,
@@ -806,14 +954,18 @@ elif page == "Compare Players":
         )
 
     if player_a == player_b:
+
         st.warning(
             "Choose two different players for a useful comparison."
         )
+
     else:
+
         data_a = get_career(player_a)
         data_b = get_career(player_b)
 
         if data_a is not None and data_b is not None:
+
             st.subheader("Career Statistics")
 
             comparison = pd.DataFrame(
@@ -897,6 +1049,7 @@ elif page == "Compare Players":
             st.bar_chart(chart_data)
 
             st.divider()
+
             st.subheader("📈 Compare Season Trends")
 
             seasons_a = get_seasons(player_a)
@@ -956,6 +1109,7 @@ elif page == "Compare Players":
 elif page == "Team History":
 
     st.title("🏟️ Player Team History")
+
     st.write(
         "See the teams recorded for a player across IPL seasons."
     )
@@ -969,8 +1123,11 @@ elif page == "Team History":
     history = get_teams(selected_player)
 
     if history.empty:
+
         st.info("No team history found for this player.")
+
     else:
+
         summary = career_team_summary(selected_player)
 
         c1, c2, c3 = st.columns(3)
@@ -1070,6 +1227,7 @@ elif page == "Team History":
 elif page == "Similar Players":
 
     st.title("🤝 Similar Player Recommendations")
+
     st.write(
         "Find players with similar statistical profiles "
         "using the existing recommendation engine."
@@ -1099,6 +1257,7 @@ elif page == "Similar Players":
     )
 
     if st.button("Find Similar Players", type="primary"):
+
         player_names = (
             recommender_players["player"]
             .astype(str)
@@ -1106,14 +1265,18 @@ elif page == "Similar Players":
         )
 
         if selected_player not in player_names:
+
             st.error(
                 "The selected player is not available "
                 "in the recommendation model."
             )
+
         else:
+
             player_index = player_names.index(selected_player)
 
             try:
+
                 recommendations = recommend_similar_players(
                     recommender_players,
                     recommender_model,
@@ -1122,11 +1285,17 @@ elif page == "Similar Players":
                     number=number_of_recommendations,
                 )
 
-                if recommendations is None or recommendations.empty:
+                if (
+                    recommendations is None
+                    or recommendations.empty
+                ):
+
                     st.info(
                         "No recommendations were returned."
                     )
+
                 else:
+
                     st.success(
                         f"Players most similar to {selected_player}"
                     )
@@ -1138,6 +1307,7 @@ elif page == "Similar Players":
                     )
 
             except Exception as error:
+
                 st.error(
                     f"Recommendation error: {error}"
                 )
@@ -1153,5 +1323,9 @@ elif page == "Similar Players":
 # =========================================================
 
 st.sidebar.divider()
+
 st.sidebar.caption("Cricket Player Finder")
-st.sidebar.caption("IPL Analytics & ML Recommendation System")
+
+st.sidebar.caption(
+    "IPL Analytics & ML Recommendation System"
+)

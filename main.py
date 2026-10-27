@@ -2,37 +2,36 @@
 import pandas as pd
 from pathlib import Path
 
-
 # ==================================================
 # 1. CONFIGURATION
 # ==================================================
 
 DATA_FOLDER = Path(".")
 OUTPUT_FOLDER = Path("processed_data")
-
 OUTPUT_FOLDER.mkdir(exist_ok=True)
 
 CAREER_FILE = OUTPUT_FOLDER / "player_statistics.csv"
 SEASON_FILE = OUTPUT_FOLDER / "player_season_statistics.csv"
 TEAM_FILE = OUTPUT_FOLDER / "player_team_history.csv"
 
-
 # ==================================================
 # 2. LOAD ORIGINAL IPL MATCH FILES
 # ==================================================
 
 csv_files = sorted([
-    file
-    for file in DATA_FOLDER.glob("*.csv")
+    file for file in DATA_FOLDER.glob("*.csv")
     if not file.name.endswith("_info.csv")
-    and file.name != "all_matches.csv"
-    and file.name != "player_statistics.csv"
+    and file.name not in {
+        "all_matches.csv",
+        "player_statistics.csv",
+        "player_season_statistics.csv",
+        "player_team_history.csv",
+    }
 ])
 
 print("=" * 60)
 print("CRICKET PLAYER FINDER - DATA PROCESSING")
 print("=" * 60)
-
 print("Match files found:", len(csv_files))
 
 if not csv_files:
@@ -44,21 +43,18 @@ match_data = []
 
 for index, file in enumerate(csv_files, start=1):
     try:
-        df = pd.read_csv(file)
-        match_data.append(df)
+        match_data.append(pd.read_csv(file))
     except Exception as error:
         print(f"Could not load {file.name}: {error}")
 
     if index % 100 == 0:
-        print(f"Loaded {index} files...")
+        print(f"Processed loading for {index} files...")
 
 if not match_data:
     raise ValueError("No match data could be loaded.")
 
 data = pd.concat(match_data, ignore_index=True)
-
 print("Total delivery records:", len(data))
-
 
 # ==================================================
 # 3. VALIDATE COLUMNS
@@ -85,8 +81,7 @@ required_columns = [
 ]
 
 missing_columns = [
-    column
-    for column in required_columns
+    column for column in required_columns
     if column not in data.columns
 ]
 
@@ -95,14 +90,11 @@ if missing_columns:
         f"Missing required columns: {missing_columns}"
     )
 
-# Fielding columns are optional because some datasets
-# may not include them.
 fielder_columns = [
     column
     for column in ["fielder_1", "fielder_2", "fielder_3"]
     if column in data.columns
 ]
-
 
 # ==================================================
 # 4. CLEAN DATA
@@ -122,8 +114,7 @@ if "extras" in data.columns:
 
 for column in numeric_columns:
     data[column] = pd.to_numeric(
-        data[column],
-        errors="coerce",
+        data[column], errors="coerce"
     ).fillna(0).clip(lower=0)
 
 text_columns = [
@@ -153,8 +144,7 @@ data["other_wicket_type"] = (
 )
 
 data["season"] = pd.to_numeric(
-    data["season"],
-    errors="coerce",
+    data["season"], errors="coerce"
 )
 
 data = data.dropna(
@@ -163,7 +153,6 @@ data = data.dropna(
 
 data["season"] = data["season"].astype(int)
 
-# Remove rows with no usable match or season identifier.
 data = data[
     data["match_id"].astype(str).str.strip().ne("")
 ].copy()
@@ -171,11 +160,9 @@ data = data[
 data["total_runs"] = data["runs_off_bat"]
 
 # A wide is not a ball faced. A no-ball is counted as faced.
-data["ball_faced"] = (
-    data["wides"] == 0
-).astype(int)
+data["ball_faced"] = (data["wides"] == 0).astype(int)
 
-# Standard credited bowler dismissals.
+# Standard bowler-credited dismissal types.
 bowler_dismissal_types = {
     "bowled",
     "caught",
@@ -185,7 +172,7 @@ bowler_dismissal_types = {
     "hit wicket",
 }
 
-# Dismissals counted against the batter's average.
+# Dismissals counted against a batter's average.
 batter_dismissal_types = {
     "bowled",
     "caught",
@@ -222,13 +209,15 @@ data["legal_balls"] = (
     & (data["noballs"] == 0)
 ).astype(int)
 
-
 # ==================================================
-# 5. HELPER: CALCULATE BATTING STATISTICS
+# 5. CALCULATE BATTING STATISTICS
 # ==================================================
 
 def calculate_batting(frame, group_columns):
-    """Calculate batting statistics for career or season groups."""
+    """
+    Calculate batting statistics for career or season groups.
+    Dismissal records are grouped using the same keys as batting.
+    """
 
     batting_data = frame[
         frame["striker"] != ""
@@ -256,97 +245,97 @@ def calculate_batting(frame, group_columns):
     batting["strike_rate"] = (
         batting["total_runs"]
         .div(
-            batting["balls_faced"].replace(0, float("nan"))
+            batting["balls_faced"].replace(
+                0, float("nan")
+            )
         )
         * 100
     ).fillna(0)
 
-    first_dismissal = (
+    # IMPORTANT:
+    # Do not select group_columns + ["player_dismissed"].
+    # For career grouping this would select "striker" twice
+    # after renaming, causing the Pandas grouping error.
+
+    player_column = group_columns[-1]
+    preceding_columns = group_columns[:-1]
+    dismissal_frames = []
+
+    # First recorded dismissed batter.
+    first = frame.loc[
         frame["player_dismissed"].ne("")
         & frame["wicket_type"].isin(
             batter_dismissal_types
-        )
-    )
+        ),
+        preceding_columns + ["player_dismissed"],
+    ].copy()
 
-    first_counts = (
-        frame.loc[first_dismissal]
-        .groupby(
-            group_columns + ["player_dismissed"],
-            dropna=False,
+    if not first.empty:
+        first = first.rename(
+            columns={
+                "player_dismissed": player_column
+            }
         )
-        .size()
-    )
+        dismissal_frames.append(first)
 
-    second_dismissal = (
+    # Additional dismissed batter, when recorded.
+    second = frame.loc[
         frame["other_player_dismissed"].ne("")
         & frame["other_wicket_type"].isin(
             batter_dismissal_types
-        )
-    )
+        ),
+        preceding_columns + ["other_player_dismissed"],
+    ].copy()
 
-    second_counts = (
-        frame.loc[second_dismissal]
-        .groupby(
-            group_columns + ["other_player_dismissed"],
+    if not second.empty:
+        second = second.rename(
+            columns={
+                "other_player_dismissed": player_column
+            }
+        )
+        dismissal_frames.append(second)
+
+    # Count dismissals by exactly the same keys used for batting.
+    if dismissal_frames:
+        dismissal_events = pd.concat(
+            dismissal_frames,
+            ignore_index=True,
+        )
+
+        dismissal_counts = dismissal_events.groupby(
+            group_columns,
             dropna=False,
+        ).size()
+
+        batting["dismissals"] = (
+            dismissal_counts
+            .reindex(batting.index)
+            .fillna(0)
+            .astype(int)
         )
-        .size()
-    )
+    else:
+        batting["dismissals"] = 0
 
-    # Map dismissal counts back to the player/group keys.
-    dismissal_counts = {}
-
-    for key, count in first_counts.items():
-        group_key = key[:-1]
-        player_name = key[-1]
-        dismissal_counts[(group_key, player_name)] = (
-            dismissal_counts.get((group_key, player_name), 0)
-            + count
-        )
-
-    for key, count in second_counts.items():
-        group_key = key[:-1]
-        player_name = key[-1]
-        dismissal_counts[(group_key, player_name)] = (
-            dismissal_counts.get((group_key, player_name), 0)
-            + count
-        )
-
-    dismissal_values = []
-
-    for index_value in batting.index:
-        if not isinstance(index_value, tuple):
-            index_value = (index_value,)
-
-        group_key = tuple(index_value)
-        player_name = group_key[-1]
-        season_or_career_key = group_key[:-1]
-
-        dismissal_values.append(
-            dismissal_counts.get(
-                (season_or_career_key, player_name),
-                0,
-            )
-        )
-
-    batting["dismissals"] = dismissal_values
-
+    # Zero dismissals means undefined batting average.
+    # Do not replace NaN with zero.
     batting["batting_average"] = (
         batting["total_runs"]
         .div(
-            batting["dismissals"].replace(0, float("nan"))
+            batting["dismissals"].replace(
+                0, float("nan")
+            )
         )
-    ).fillna(0)
+    )
 
     return batting
 
 
 # ==================================================
-# 6. HELPER: CALCULATE BOWLING STATISTICS
+# 6. CALCULATE BOWLING STATISTICS
 # ==================================================
 
 def calculate_bowling(frame, group_columns):
-    """Calculate bowling statistics for career or season groups."""
+    """Calculate bowling statistics by career or season."""
 
     bowling_data = frame[
         frame["bowler"] != ""
@@ -384,7 +373,7 @@ def calculate_bowling(frame, group_columns):
                 0, float("nan")
             )
         )
-    ).fillna(0)
+    )
 
     return bowling
 
@@ -413,9 +402,32 @@ players = career_batting.join(
     how="outer",
 )
 
-players = players.fillna(0)
+# Fill counting statistics only.
+# Preserve undefined batting and bowling averages.
+career_count_columns = [
+    "total_runs",
+    "balls_faced",
+    "fours",
+    "sixes",
+    "dismissals",
+    "runs_conceded",
+    "wickets",
+    "legal_balls",
+    "overs_bowled",
+]
+
+for column in career_count_columns:
+    if column in players.columns:
+        players[column] = players[column].fillna(0)
+
+for column in ["strike_rate", "economy"]:
+    if column in players.columns:
+        players[column] = players[column].fillna(0)
+
+players = players.reset_index()
 
 career_columns = [
+    "player",
     "total_runs",
     "balls_faced",
     "fours",
@@ -433,14 +445,15 @@ career_columns = [
 
 players = players.reindex(
     columns=career_columns,
-    fill_value=0,
 )
 
-players.to_csv(CAREER_FILE, index=True)
+players.to_csv(
+    CAREER_FILE,
+    index=False,
+)
 
 print("Career statistics saved:", CAREER_FILE)
 print("Career player records:", len(players))
-
 
 # ==================================================
 # 8. SEASON-WISE PLAYER STATISTICS
@@ -458,7 +471,6 @@ season_bowling = calculate_bowling(
     ["season", "bowler"],
 )
 
-# Standardise the player key before joining.
 season_batting.index = season_batting.index.set_names(
     ["season", "player"]
 )
@@ -470,8 +482,33 @@ season_bowling.index = season_bowling.index.set_names(
 season_stats = season_batting.join(
     season_bowling,
     how="outer",
-).fillna(0)
+)
 
+season_count_columns = [
+    "total_runs",
+    "balls_faced",
+    "fours",
+    "sixes",
+    "dismissals",
+    "runs_conceded",
+    "wickets",
+    "legal_balls",
+    "overs_bowled",
+]
+
+for column in season_count_columns:
+    if column in season_stats.columns:
+        season_stats[column] = (
+            season_stats[column].fillna(0)
+        )
+
+for column in ["strike_rate", "economy"]:
+    if column in season_stats.columns:
+        season_stats[column] = (
+            season_stats[column].fillna(0)
+        )
+
+# Keep batting_average and bowling_average NaN when undefined.
 season_stats = season_stats.reset_index()
 
 season_columns = [
@@ -496,8 +533,8 @@ season_stats = season_stats.reindex(
     columns=season_columns,
 )
 
-# Include players who appeared in a match but had no recorded
-# batting or bowling delivery, such as a non-striker.
+# Include recorded appearances by players without a batting
+# or bowling row, such as a non-striker.
 appearance_candidates = []
 
 for player_column in [
@@ -505,9 +542,10 @@ for player_column in [
     "non_striker",
     "bowler",
 ]:
-    subset = data[
-        data[player_column].ne("")
-    ][["season", player_column]].copy()
+    subset = data.loc[
+        data[player_column].ne(""),
+        ["season", player_column],
+    ].copy()
 
     subset.columns = ["season", "player"]
     appearance_candidates.append(subset)
@@ -517,30 +555,34 @@ appearances = pd.concat(
     ignore_index=True,
 ).drop_duplicates()
 
-season_keys = season_stats[["season", "player"]]
+existing_keys = season_stats[
+    ["season", "player"]
+]
 
-missing_appearance_keys = (
-    appearances.merge(
-        season_keys,
-        on=["season", "player"],
-        how="left",
-        indicator=True,
-    )
+missing_keys = appearances.merge(
+    existing_keys,
+    on=["season", "player"],
+    how="left",
+    indicator=True,
 )
 
-missing_appearance_keys = missing_appearance_keys[
-    missing_appearance_keys["_merge"] == "left_only"
-][["season", "player"]]
+missing_keys = missing_keys.loc[
+    missing_keys["_merge"] == "left_only",
+    ["season", "player"],
+]
 
-if not missing_appearance_keys.empty:
-    zero_rows = missing_appearance_keys.copy()
+if not missing_keys.empty:
+    zero_rows = missing_keys.copy()
 
     for column in season_columns:
         if column not in ["season", "player"]:
             zero_rows[column] = 0
 
     season_stats = pd.concat(
-        [season_stats, zero_rows[season_columns]],
+        [
+            season_stats,
+            zero_rows[season_columns],
+        ],
         ignore_index=True,
     )
 
@@ -556,7 +598,6 @@ season_stats.to_csv(
 print("Season statistics saved:", SEASON_FILE)
 print("Player-season records:", len(season_stats))
 
-
 # ==================================================
 # 9. PLAYER TEAM HISTORY
 # ==================================================
@@ -566,23 +607,18 @@ print("\nBuilding player team history...")
 appearance_frames = []
 
 
-def add_appearances(
-    player_column,
-    team_column,
-    role,
-):
-    """Create player-team-season appearance records."""
+def add_appearances(player_column, team_column):
+    """Record players associated with teams in each match."""
 
-    subset = data[
+    subset = data.loc[
         data[player_column].ne("")
-        & data[team_column].ne("")
-    ][
+        & data[team_column].ne(""),
         [
             "match_id",
             "season",
             player_column,
             team_column,
-        ]
+        ],
     ].copy()
 
     subset = subset.rename(
@@ -592,49 +628,31 @@ def add_appearances(
         }
     )
 
-    subset["role"] = role
-
     appearance_frames.append(subset)
 
 
-# Batting players belong to the batting team.
-add_appearances(
-    "striker",
-    "batting_team",
-    "batter",
-)
-
-add_appearances(
-    "non_striker",
-    "batting_team",
-    "non-striker",
-)
+# Batters belong to the batting team.
+add_appearances("striker", "batting_team")
+add_appearances("non_striker", "batting_team")
 
 # Bowlers and fielders belong to the bowling team.
-add_appearances(
-    "bowler",
-    "bowling_team",
-    "bowler",
-)
+add_appearances("bowler", "bowling_team")
 
 for fielder_column in fielder_columns:
     add_appearances(
         fielder_column,
         "bowling_team",
-        "fielder",
     )
 
 # Dismissed batters belong to the batting team.
 add_appearances(
     "player_dismissed",
     "batting_team",
-    "dismissed batter",
 )
 
 add_appearances(
     "other_player_dismissed",
     "batting_team",
-    "dismissed batter",
 )
 
 all_appearances = pd.concat(
@@ -647,7 +665,7 @@ all_appearances = all_appearances[
     & all_appearances["team"].ne("")
 ].copy()
 
-# Remove duplicate player-team-match records so each match counts once.
+# Count each player-team-match only once.
 all_appearances = all_appearances.drop_duplicates(
     subset=[
         "match_id",
@@ -676,7 +694,6 @@ team_history.to_csv(
 print("Team history saved:", TEAM_FILE)
 print("Player-team-season records:", len(team_history))
 
-
 # ==================================================
 # 10. DATA QUALITY SUMMARY
 # ==================================================
@@ -691,22 +708,38 @@ print(
     int((players["legal_balls"] > 0).sum()),
 )
 print(
-    "Players with zero legal bowling balls:",
+    "Players with no legal bowling balls:",
     int((players["legal_balls"] == 0).sum()),
 )
 
-print("Seasons covered:", sorted(data["season"].unique().tolist()))
-print("Unique teams:", data["batting_team"].nunique())
+print(
+    "Seasons covered:",
+    sorted(data["season"].unique().tolist()),
+)
+
+print(
+    "Unique batting teams:",
+    data["batting_team"].nunique(),
+)
 
 print("\nGenerated files:")
 print("1.", CAREER_FILE)
 print("2.", SEASON_FILE)
 print("3.", TEAM_FILE)
 
+print("\nSample career batting averages:")
+print(
+    players[
+        [
+            "player",
+            "total_runs",
+            "dismissals",
+            "batting_average",
+        ]
+    ].head(10).to_string(index=False)
+)
+
 print("\nSample season statistics:")
 print(season_stats.head(10).to_string(index=False))
-
-print("\nSample team history:")
-print(team_history.head(10).to_string(index=False))
 
 print("\nAll processing finished.")
